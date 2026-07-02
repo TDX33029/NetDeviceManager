@@ -14,9 +14,12 @@ from configparser import ConfigParser
 from datetime import datetime, timezone
 from pathlib import Path
 
-# 强制 UTF-8 输出
+# 强制 UTF-8 输出（忽略重定向环境下不可 reconfigure 的错误）
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
 
 import requests
 from requests.adapters import HTTPAdapter
