@@ -1,15 +1,13 @@
 @echo off
-cd /d "%~dp0"
+title BNBMonitor - BTC/USDT
+cd /d "D:\Document\tempPrj\NetDeviceManager\BNBServices"
 
-:: 检查依赖
-python -c "import requests" 2>nul
-if %errorlevel% neq 0 (
-    echo 正在安装依赖...
-    pip install requests
-)
-
-:: 直接启动，不在bat层做chcp，让Python自己处理编码
-echo BNBMonitor - BTC/USDT 启动中...
+echo BNBMonitor - BTC/USDT starting...
 echo.
-python bnb_monitor.py
+
+:: 直接用绝对路径，不走 PATH，避免 CMD 从 bash 继承环境找不到 python
+C:\Users\Lenovo\AppData\Local\Programs\Python\Python314\python.exe bnb_monitor.py
+
+echo.
+echo ========== BNBMonitor exited ==========
 pause
