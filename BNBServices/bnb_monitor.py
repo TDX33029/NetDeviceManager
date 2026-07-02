@@ -193,9 +193,9 @@ def print_line(price: float | None, highs: list[float | None],
     # 刷新历史最低
     if any(new_low_flags) and prev_lows is not None:
         for i in range(len(WINDOWS)):
-            if new_low_flags[i] and prev_lows[i] is not None and lows[i] is not None and lows[i] < prev_lows[i]:
-                pct = (lows[i] - prev_lows[i]) / prev_lows[i] * 100
-                parts.append(f"[Drop:{fmt_val(prev_lows[i])} -> {fmt_val(lows[i])}({pct:.4f}%)]")
+            if new_low_flags[i] and prev_lows[i] is not None and highs[i] is not None and highs[i] < prev_lows[i]:
+                pct = (highs[i] - prev_lows[i]) / prev_lows[i] * 100
+                parts.append(f"[Drop:{fmt_val(prev_lows[i])} -> {fmt_val(highs[i])}({pct:.4f}%)]")
                 break
 
     if breakout_streak >= 1:
