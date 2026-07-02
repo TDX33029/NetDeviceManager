@@ -41,6 +41,9 @@ def load_config(config_path: str = None) -> ConfigParser:
     files = [config_path,
              Path(__file__).resolve().parent / "config.ini",
              Path("config.ini")]
+    # 支持命令行传入配置文件路径
+    if len(sys.argv) > 1:
+        files.insert(0, sys.argv[1])
     for f in files:
         if f and Path(f).exists():
             cfg.read(f, encoding="utf-8")
