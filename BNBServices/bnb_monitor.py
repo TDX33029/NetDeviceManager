@@ -157,8 +157,16 @@ def print_line(price: float | None, highs: list[float | None],
 
     parts = [f"[{ts}]-> {fmt_val(price)}"]
     for i, ((label, _), h) in enumerate(zip(WINDOWS, highs)):
-        flag = " *" if new_high_flags[i] else ""
-        parts.append(f"{label}->{fmt_val(h)}({fmt_pct(h)}){flag}")
+        parts.append(f"{label}->{fmt_val(h)}({fmt_pct(h)})")
+
+    # 与启动基准比较
+    parts.append(f"start->{fmt_val(base_price)}({fmt_pct(base_price)})")
+
+    # 刷新历史高价标记
+    new_labels = [label for i, (label, _) in enumerate(WINDOWS) if new_high_flags[i]]
+    if new_labels:
+        parts.append(f"[new:{','.join(new_labels)}]")
+
     if breakout_streak >= 1:
         parts.append(f"[bk:{breakout_streak}]")
 
@@ -168,7 +176,7 @@ def print_line(price: float | None, highs: list[float | None],
 def print_header() -> None:
     print("BNBMonitor — BTC/USDT")
     labels = "  ".join(f"{label}->high(%chg)" for label, _ in WINDOWS)
-    print(f"[time]-> price    {labels}  (* = new high)")
+    print(f"[time]-> price    {labels}    start->price(%chg)  [new:windows]")
 
 
 # --- Main loop ---
