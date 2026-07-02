@@ -149,6 +149,7 @@ WINDOWS = [
 
 
 def print_line(price: float | None, highs: list[float | None],
+               lows: list[float | None],
                base_price: float, prev_highs: list[float | None],
                prev_lows: list[float | None],
                breakout_streak: int = 0,
@@ -193,9 +194,9 @@ def print_line(price: float | None, highs: list[float | None],
     # 刷新历史最低
     if any(new_low_flags) and prev_lows is not None:
         for i in range(len(WINDOWS)):
-            if new_low_flags[i] and prev_lows[i] is not None and highs[i] is not None and highs[i] < prev_lows[i]:
-                pct = (highs[i] - prev_lows[i]) / prev_lows[i] * 100
-                parts.append(f"[Drop:{fmt_val(prev_lows[i])} -> {fmt_val(highs[i])}({pct:.4f}%)]")
+            if new_low_flags[i] and prev_lows[i] is not None and lows[i] is not None and lows[i] < prev_lows[i]:
+                pct = (lows[i] - prev_lows[i]) / prev_lows[i] * 100
+                parts.append(f"[Drop:{fmt_val(prev_lows[i])} -> {fmt_val(lows[i])}({pct:.4f}%)]")
                 break
 
     if breakout_streak >= 1:
@@ -319,7 +320,7 @@ def main():
             else:
                 breakout_streak = 0
 
-            print_line(price, highs, base_price, old_highs, old_lows, breakout_streak, new_high_flags, new_low_flags)
+            print_line(price, highs, lows, base_price, old_highs, old_lows, breakout_streak, new_high_flags, new_low_flags)
 
             # Fixed threshold alerts
             if upper_threshold > 0 and price > upper_threshold:
