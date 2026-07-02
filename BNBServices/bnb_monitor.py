@@ -14,7 +14,6 @@ from configparser import ConfigParser
 from datetime import datetime, timezone
 from pathlib import Path
 
-# 强制 UTF-8 输出（忽略重定向环境下不可 reconfigure 的错误）
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -25,7 +24,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-# --- 日志配置（仅文件，终端用 print 管理） ---
 LOG_FILE = Path(__file__).resolve().parent / "bnb_monitor.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -34,7 +32,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("BNBMonitor")
 
-# 价格历史
 price_history: list[tuple[float, float]] = []
 
 
@@ -70,7 +67,7 @@ def create_http_session(retries: int = 3) -> requests.Session:
     return s
 
 
-def fetch_btc_usdt_price(session: requests.Session, base_url: str, timeout: int = 15) -> float | None:
+def fetch_btc_usdt_price(session: requests.Session, base_url: str, timeout: int = 10) -> float | None:
     url = f"{base_url.rstrip('/')}/api/v3/ticker/price"
     try:
         resp = session.get(url, params={"symbol": "BTCUSDT"}, timeout=timeout)
@@ -85,7 +82,7 @@ def fetch_btc_usdt_price(session: requests.Session, base_url: str, timeout: int 
 
 # --- Telegram ---
 def send_telegram(session: requests.Session, bot_token: str, chat_id: str,
-                  message: str, timeout: int = 15) -> bool:
+                  message: str, timeout: int = 10) -> bool:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     try:
         resp = session.post(url, json={"chat_id": chat_id, "text": message,
@@ -118,32 +115,21 @@ def get_highest_since(since_ts: float) -> float | None:
     return best
 
 
-def format_duration(seconds: float) -> str:
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    elif seconds < 3600:
-        return f"{int(seconds//60)}m{int(seconds%60)}s"
-    else:
-        return f"{int(seconds//3600)}h{int((seconds%3600)//60)}m"
-
-
-def format_price_alert(price: float, prev_24h_high: float) -> str:
+def format_price_alert(price: float, high24h: float) -> str:
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    change = price - prev_24h_high
-    pct = (change / prev_24h_high * 100) if prev_24h_high > 0 else 0
+    pct = (price / high24h - 1) * 100
     return (
-        f"🚀 <b>BTC/USDT 突破24小时最高价!</b>\n\n"
-        f"当前价格: <b>${price:,.2f}</b>\n"
-        f"此前24h最高: <b>${prev_24h_high:,.2f}</b>\n"
-        f"涨幅: +${change:,.2f} (+{pct:.2f}%)\n\n"
+        f"🚀 <b>BTC/USDT 接近24h最高价!</b>\n\n"
+        f"当前: <b>${price:,.2f}</b>\n"
+        f"24h最高: <b>${high24h:,.2f}</b>\n"
+        f"距最高: +{pct:.2f}% (>{99.5 - (price/high24h*100):.2f}%)\n\n"
         f"⏰ {now_utc}"
     )
 
 
 # --- 终端输出 ---
 def print_line(price: float | None, high15: float | None, high3h: float | None,
-               high24h: float | None) -> None:
-    """[2026.07.03 12:11:11]-> 12345.34    15min->23444.44(+xx.xx%)  3h->33333.33(+12.34%)  24h->xxxxx.xx(+xx.xx%)"""
+               high24h: float | None, near_high_count: int = 0) -> None:
     ts = datetime.fromtimestamp(time.time()).strftime("%Y.%m.%d %H:%M:%S")
 
     def fmt_val(v: float | None) -> str:
@@ -153,13 +139,14 @@ def print_line(price: float | None, high15: float | None, high3h: float | None,
         if high is not None and price is not None and high > 0:
             pct = (price - high) / high * 100
             sign = "+" if pct >= 0 else ""
-            return f"{sign}{pct:.2f}%"
+            return f"{sign}{pct:.4f}%"
         return "--"
 
+    extra = f"  [接近:{near_high_count}]" if near_high_count >= 3 else ""
     line = (f"[{ts}]-> {fmt_val(price)}    "
             f"15min->{fmt_val(high15)}({fmt_pct(high15)})  "
             f"3h->{fmt_val(high3h)}({fmt_pct(high3h)})  "
-            f"24h->{fmt_val(high24h)}({fmt_pct(high24h)})")
+            f"24h->{fmt_val(high24h)}({fmt_pct(high24h)}){extra}")
     print(line, flush=True)
 
 
@@ -175,35 +162,36 @@ def main():
     chat_id = cfg.get("telegram", "chat_id").strip()
     upper_threshold = cfg.getfloat("monitor", "upper_threshold", fallback=0)
     lower_threshold = cfg.getfloat("monitor", "lower_threshold", fallback=0)
-    check_interval = cfg.getfloat("monitor", "check_interval", fallback=60)
+    check_interval = cfg.getfloat("monitor", "check_interval", fallback=10)
     alert_cooldown = cfg.getint("monitor", "alert_cooldown", fallback=3600)
-    base_url = cfg.get("api", "base_url", fallback="https://api.binance.com").strip()
-    timeout = cfg.getint("api", "timeout", fallback=15)
+    base_url = cfg.get("api", "base_url", fallback="https://data-api.binance.vision").strip()
+    timeout = cfg.getint("api", "timeout", fallback=10)
 
-    if check_interval < 10:
-        check_interval = 10
+    # 最小间隔 3s（Binance API 权重限制约 1200/min，3s 完全安全）
+    if check_interval < 3:
+        check_interval = 3
+
+    # 接近24h最高价触发参数
+    NEAR_RATIO = 0.995       # 99.5%
+    NEAR_CONSECUTIVE = 5     # 连续 N 次在 99.5% 以上才发通知
 
     log.info(f"启动监控 | 上限:{upper_threshold} 下限:{lower_threshold} "
              f"间隔:{check_interval}s 冷却:{alert_cooldown}s")
-    log.info(f"API: {base_url}")
+    log.info(f"API: {base_url} | 接近阈值: {NEAR_RATIO*100}%连续{NEAR_CONSECUTIVE}次")
 
     session = create_http_session()
 
-    # 启动通知
     send_telegram(session, bot_token, chat_id,
                   f"🟢 <b>BNBMonitor 已启动</b>\n\n"
                   f"币对: BTC/USDT\n间隔: {check_interval}s\n"
-                  + (f"上限: ${upper_threshold:,.2f}\n" if upper_threshold > 0 else "")
-                  + (f"下限: ${lower_threshold:,.2f}\n" if lower_threshold > 0 else ""),
+                  f"通知条件: 连续{NEAR_CONSECUTIVE}次超过24h最高价的{NEAR_RATIO*100:.1f}%",
                   timeout=timeout)
 
     start_time = time.time()
     check_count = 0
     consecutive_failures = 0
-
-    # 追踪 24h 最高价变化
-    last_24h_high = None
     last_breakout_alert = 0.0
+    near_high_streak = 0   # 连续接近 99.5% 的计数
 
     print_header()
 
@@ -217,6 +205,7 @@ def main():
                     send_telegram(session, bot_token, chat_id,
                                   "⚠️ 连续10次获取价格失败", timeout=timeout)
                     consecutive_failures = 0
+                near_high_streak = 0
                 time.sleep(check_interval)
                 continue
 
@@ -224,43 +213,45 @@ def main():
             now = time.time()
             check_count += 1
 
-            # 更新历史
             price_history.append((now, price))
             _cleanup_history(now)
 
-            # 计算各时段最高
             high15 = get_highest_since(now - 900)
             high3h = get_highest_since(now - 10800)
             high24h = get_highest_since(now - 86400)
 
-            # 终端单行输出
-            print_line(price, high15, high3h, high24h)
+            # --- 接近24h最高价检测 ---
+            if high24h is not None and high24h > 0:
+                if price >= high24h * NEAR_RATIO:
+                    near_high_streak += 1
+                else:
+                    near_high_streak = 0
 
-            # --- 警报逻辑：突破 24h 最高价或触及阈值时发送 TG ---
-            if high24h is not None:
-                if last_24h_high is None or high24h > last_24h_high:
-                    if last_24h_high is not None:
-                        log.info(f"24h新高: ${price:,.2f} (前高 ${last_24h_high:,.2f})")
-                        if now - last_breakout_alert >= alert_cooldown:
-                            send_telegram(session, bot_token, chat_id,
-                                          format_price_alert(price, last_24h_high),
-                                          timeout=timeout)
-                            last_breakout_alert = now
-                    last_24h_high = high24h
+                # 连续 NEAR_CONSECUTIVE 次在 99.5% 以上 → 发送 TG
+                if near_high_streak >= NEAR_CONSECUTIVE:
+                    if now - last_breakout_alert >= alert_cooldown:
+                        send_telegram(session, bot_token, chat_id,
+                                      format_price_alert(price, high24h),
+                                      timeout=timeout)
+                        last_breakout_alert = now
+                    near_high_streak = 0
+            else:
+                near_high_streak = 0
+
+            # 终端输出
+            print_line(price, high15, high3h, high24h, near_high_streak)
 
             # 固定阈值警报
             if upper_threshold > 0 and price > upper_threshold:
                 if now - last_breakout_alert >= alert_cooldown:
                     send_telegram(session, bot_token, chat_id,
-                                  f"⚠️ <b>BTC/USDT 超过上限!</b>\n\n"
-                                  f"当前: ${price:,.2f}\n上限阈值: ${upper_threshold:,.2f}",
+                                  f"⚠️ 超过上限 ${upper_threshold:,.2f} | 当前 ${price:,.2f}",
                                   timeout=timeout)
                     last_breakout_alert = now
             if lower_threshold > 0 and price < lower_threshold:
                 if now - last_breakout_alert >= alert_cooldown:
                     send_telegram(session, bot_token, chat_id,
-                                  f"⚠️ <b>BTC/USDT 跌破下限!</b>\n\n"
-                                  f"当前: ${price:,.2f}\n下限阈值: ${lower_threshold:,.2f}",
+                                  f"⚠️ 跌破下限 ${lower_threshold:,.2f} | 当前 ${price:,.2f}",
                                   timeout=timeout)
                     last_breakout_alert = now
 
