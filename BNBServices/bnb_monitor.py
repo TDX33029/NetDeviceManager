@@ -118,6 +118,14 @@ def get_highest_since(since_ts: float) -> float | None:
     return best
 
 
+def get_lowest_since(since_ts: float) -> float | None:
+    best = None
+    for ts, p in price_history:
+        if ts >= since_ts and (best is None or p < best):
+            best = p
+    return best
+
+
 def format_price_alert(price: float, high24h: float) -> str:
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     pct = (price - high24h) / high24h * 100
@@ -185,9 +193,9 @@ def print_line(price: float | None, highs: list[float | None],
     # 刷新历史最低
     if any(new_low_flags) and prev_lows is not None:
         for i in range(len(WINDOWS)):
-            if new_low_flags[i] and prev_lows[i] is not None and highs[i] is not None and highs[i] < prev_lows[i]:
-                pct = (highs[i] - prev_lows[i]) / prev_lows[i] * 100
-                parts.append(f"[Down:{fmt_val(prev_lows[i])} -> {fmt_val(highs[i])}({pct:.4f}%)]")
+            if new_low_flags[i] and prev_lows[i] is not None and lows[i] is not None and lows[i] < prev_lows[i]:
+                pct = (lows[i] - prev_lows[i]) / prev_lows[i] * 100
+                parts.append(f"[Drop:{fmt_val(prev_lows[i])} -> {fmt_val(lows[i])}({pct:.4f}%)]")
                 break
 
     if breakout_streak >= 1:
@@ -271,6 +279,7 @@ def main():
                 base_price = price
 
             highs = [get_highest_since(now - w) for _, w in WINDOWS]
+            lows = [get_lowest_since(now - w) for _, w in WINDOWS]
             high24h = highs[3]
 
             # 检测刷新历史最高
@@ -283,16 +292,15 @@ def main():
                             new_high_flags[i] = True
             prev_highs = highs
 
-            # 检测刷新历史最低（当前价格 = 窗口最低）
-            lows = highs  # 当只有一条记录时 high==low；实际需要单独追踪 low。简化：用 price 比
+            # 检测刷新历史最低
             old_lows = prev_lows
             new_low_flags = [False] * len(WINDOWS)
             if old_lows is not None:
                 for i in range(len(WINDOWS)):
-                    if highs[i] is not None and old_lows[i] is not None:
-                        if highs[i] < old_lows[i]:
+                    if lows[i] is not None and old_lows[i] is not None:
+                        if lows[i] < old_lows[i]:
                             new_low_flags[i] = True
-            prev_lows = highs
+            prev_lows = lows
 
             # Breakout detection
             if high24h is not None and high24h > 0:
