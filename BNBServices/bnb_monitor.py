@@ -120,9 +120,9 @@ def format_price_alert(price: float, high24h: float) -> str:
     pct = (price / high24h - 1) * 100
     return (
         f"🚀 <b>BTC/USDT 接近24h最高价!</b>\n\n"
-        f"当前: <b>${price:,.2f}</b>\n"
-        f"24h最高: <b>${high24h:,.2f}</b>\n"
-        f"距最高: +{pct:.2f}% (>{99.5 - (price/high24h*100):.2f}%)\n\n"
+        f"当前: <b>${price:,.6f}</b>\n"
+        f"24h最高: <b>${high24h:,.6f}</b>\n"
+        f"距最高: +{pct:.6f}%\n\n"
         f"⏰ {now_utc}"
     )
 
@@ -133,13 +133,13 @@ def print_line(price: float | None, high15: float | None, high3h: float | None,
     ts = datetime.fromtimestamp(time.time()).strftime("%Y.%m.%d %H:%M:%S")
 
     def fmt_val(v: float | None) -> str:
-        return f"{v:,.2f}" if v is not None else "--"
+        return f"{v:,.6f}" if v is not None else "--"
 
     def fmt_pct(high: float | None) -> str:
         if high is not None and price is not None and high > 0:
             pct = (price - high) / high * 100
             sign = "+" if pct >= 0 else ""
-            return f"{sign}{pct:.4f}%"
+            return f"{sign}{pct:.6f}%"
         return "--"
 
     extra = f"  [接近:{near_high_count}]" if near_high_count >= 3 else ""
