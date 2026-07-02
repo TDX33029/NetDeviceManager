@@ -138,7 +138,8 @@ WINDOWS = [
 
 
 def print_line(price: float | None, highs: list[float | None],
-               base_price: float, breakout_streak: int = 0,
+               base_price: float, prev_highs: list[float | None],
+               breakout_streak: int = 0,
                new_high_flags: list[bool] | None = None) -> None:
     ts = datetime.fromtimestamp(time.time()).strftime("%Y.%m.%d %H:%M:%S")
 
@@ -154,6 +155,8 @@ def print_line(price: float | None, highs: list[float | None],
 
     if new_high_flags is None:
         new_high_flags = [False] * len(WINDOWS)
+    if prev_highs is None:
+        prev_highs = [None] * len(WINDOWS)
 
     parts = [f"[{ts}]-> {fmt_val(price)}"]
     for i, ((label, _), h) in enumerate(zip(WINDOWS, highs)):
@@ -162,10 +165,16 @@ def print_line(price: float | None, highs: list[float | None],
     # 与启动基准比较
     parts.append(f"start->{fmt_val(base_price)}({fmt_pct(base_price)})")
 
-    # 刷新历史高价标记
-    new_labels = [label for i, (label, _) in enumerate(WINDOWS) if new_high_flags[i]]
-    if new_labels:
-        parts.append(f"[new:{','.join(new_labels)}]")
+    # 刷新历史高价标记：显示 旧高->新高
+    new_parts = []
+    for i, (label, _) in enumerate(WINDOWS):
+        if new_high_flags[i] and prev_highs[i] is not None and highs[i] is not None:
+            new_parts.append(f"{label} {fmt_val(prev_highs[i])}>{fmt_val(highs[i])}")
+    if new_parts:
+        parts.append(f"[new:{' | '.join(new_parts)}]")
+
+    if breakout_streak >= 1:
+        parts.append(f"[bk:{breakout_streak}]")
 
     if breakout_streak >= 1:
         parts.append(f"[bk:{breakout_streak}]")
@@ -274,7 +283,7 @@ def main():
             else:
                 breakout_streak = 0
 
-            print_line(price, highs, base_price, breakout_streak, new_high_flags)
+            print_line(price, highs, base_price, prev_highs, breakout_streak, new_high_flags)
 
             # Fixed threshold alerts
             if upper_threshold > 0 and price > upper_threshold:
