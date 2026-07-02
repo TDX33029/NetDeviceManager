@@ -117,12 +117,13 @@ def get_highest_since(since_ts: float) -> float | None:
 
 def format_price_alert(price: float, high24h: float) -> str:
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    pct = (price / high24h - 1) * 100
+    pct = (price - high24h) / high24h * 100
+    sign = "+" if pct >= 0 else ""
     return (
-        f"🚀 <b>BTC/USDT 接近24h最高价!</b>\n\n"
-        f"当前: <b>${price:,.6f}</b>\n"
-        f"24h最高: <b>${high24h:,.6f}</b>\n"
-        f"距最高: +{pct:.6f}%\n\n"
+        f"🚀 <b>BTC/USDT 24h High Alert!</b>\n\n"
+        f"Price: <b>${price:,.2f}</b>\n"
+        f"24h High: <b>${high24h:,.2f}</b>\n"
+        f"Change: {sign}{pct:,.6f}%\n\n"
         f"⏰ {now_utc}"
     )
 
@@ -133,7 +134,7 @@ def print_line(price: float | None, high15: float | None, high3h: float | None,
     ts = datetime.fromtimestamp(time.time()).strftime("%Y.%m.%d %H:%M:%S")
 
     def fmt_val(v: float | None) -> str:
-        return f"{v:,.6f}" if v is not None else "--"
+        return f"{v:,.2f}" if v is not None else "--"
 
     def fmt_pct(high: float | None) -> str:
         if high is not None and price is not None and high > 0:
@@ -142,7 +143,7 @@ def print_line(price: float | None, high15: float | None, high3h: float | None,
             return f"{sign}{pct:.6f}%"
         return "--"
 
-    extra = f"  [接近:{near_high_count}]" if near_high_count >= 3 else ""
+    extra = f"  [near:{near_high_count}]" if near_high_count >= 3 else ""
     line = (f"[{ts}]-> {fmt_val(price)}    "
             f"15min->{fmt_val(high15)}({fmt_pct(high15)})  "
             f"3h->{fmt_val(high3h)}({fmt_pct(high3h)})  "
