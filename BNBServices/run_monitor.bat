@@ -1,22 +1,15 @@
 @echo off
-title BNBMonitor - BTC/USDT 汇率监测
-chcp 65001 >nul
 cd /d "%~dp0"
-python -c "import requests; from urllib3.util import Retry" 2>nul
+
+:: 检查依赖
+python -c "import requests" 2>nul
 if %errorlevel% neq 0 (
-    echo ⏳ 正在安装依赖...
+    echo 正在安装依赖...
     pip install requests
-    echo.
-    echo ✅ 依赖安装完成，按任意键启动监控...
-    pause >nul
 )
-cls
+
+:: 直接启动，不在bat层做chcp，让Python自己处理编码
+echo BNBMonitor - BTC/USDT 启动中...
 echo.
-echo ╔══════════════════════════════════════════════╗
-echo ║   BNBMonitor - BTC/USDT 汇率监测             ║
-echo ║   按 Ctrl+C 可安全退出                        ║
-echo ╚══════════════════════════════════════════════╝
-echo.
-set PYTHONIOENCODING=utf-8
 python bnb_monitor.py
 pause
