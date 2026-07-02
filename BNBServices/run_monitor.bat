@@ -1,4 +1,5 @@
 @echo off
+title BNBMonitor - BTC/USDT 汇率监测
 chcp 65001 >nul
 cd /d "%~dp0"
 python -c "import requests; from urllib3.util import Retry" 2>nul
