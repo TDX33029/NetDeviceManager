@@ -121,8 +121,8 @@ def format_price_alert(price: float, high24h: float) -> str:
     sign = "+" if pct >= 0 else ""
     return (
         f"🚀 <b>BTC/USDT 24h High Alert!</b>\n\n"
-        f"Price: <b>${price:,.4f}</b>\n"
-        f"24h High: <b>${high24h:,.4f}</b>\n"
+        f"Price: <b>${price:,.2f}</b>\n"
+        f"24h High: <b>${high24h:,.2f}</b>\n"
         f"Change: {sign}{pct:,.6f}%\n\n"
         f"⏰ {now_utc}"
     )
@@ -134,7 +134,7 @@ def print_line(price: float | None, high15: float | None, high3h: float | None,
     ts = datetime.fromtimestamp(time.time()).strftime("%Y.%m.%d %H:%M:%S")
 
     def fmt_val(v: float | None) -> str:
-        return f"{v:,.4f}" if v is not None else "--"
+        return f"{v:,.2f}" if v is not None else "--"
 
     def fmt_pct(high: float | None) -> str:
         if high is not None and price is not None and high > 0:
@@ -175,6 +175,10 @@ def main():
     # 接近24h最高价触发参数
     NEAR_RATIO = 0.995       # 99.5%
     NEAR_CONSECUTIVE = 5     # 连续 N 次在 99.5% 以上才发通知
+
+    # 记录触发时的 24h 最高价基准 — 只在触发后重置，避免因 high24h 刷新导致 streak 反复清零
+    alert_24h_base = None
+    last_alert_price = 0.0
 
     log.info(f"启动监控 | 上限:{upper_threshold} 下限:{lower_threshold} "
              f"间隔:{check_interval}s 冷却:{alert_cooldown}s")
@@ -221,23 +225,28 @@ def main():
             high3h = get_highest_since(now - 10800)
             high24h = get_highest_since(now - 86400)
 
-            # --- 接近24h最高价检测 ---
-            if high24h is not None and high24h > 0:
-                if price >= high24h * NEAR_RATIO:
+            # --- 接近24h最高价检测（稳定基准，不因 high24h 滚动而清零）---
+            snapped_high = alert_24h_base or high24h
+            if snapped_high is not None and snapped_high > 0:
+                if price >= snapped_high * NEAR_RATIO:
                     near_high_streak += 1
                 else:
+                    # 价格跌回阈值以下，重置所有
                     near_high_streak = 0
+                    alert_24h_base = None
 
                 # 连续 NEAR_CONSECUTIVE 次在 99.5% 以上 → 发送 TG
                 if near_high_streak >= NEAR_CONSECUTIVE:
                     if now - last_breakout_alert >= alert_cooldown:
                         send_telegram(session, bot_token, chat_id,
-                                      format_price_alert(price, high24h),
+                                      format_price_alert(price, snapped_high),
                                       timeout=timeout)
                         last_breakout_alert = now
                     near_high_streak = 0
+                    alert_24h_base = None
             else:
                 near_high_streak = 0
+                alert_24h_base = None
 
             # 终端输出
             print_line(price, high15, high3h, high24h, near_high_streak)
