@@ -201,8 +201,7 @@ def main():
     check_count = 0
     consecutive_failures = 0
 
-    # 追踪 3h / 24h 最高价变化，用于突破通知
-    last_3h_high = None
+    # 追踪 24h 最高价变化
     last_24h_high = None
     last_breakout_alert = 0.0
 
@@ -237,23 +236,7 @@ def main():
             # 终端单行输出
             print_line(price, high15, high3h, high24h)
 
-            # --- 警报逻辑 ---
-            # 1) 突破 3h 最高价 → TG 通知
-            if high3h is not None:
-                if last_3h_high is None or high3h > last_3h_high:
-                    if last_3h_high is not None:
-                        log.info(f"3h新高: ${price:,.2f} (前高 ${last_3h_high:,.2f})")
-                        if now - last_breakout_alert >= alert_cooldown:
-                            send_telegram(session, bot_token, chat_id,
-                                          f"🚀 <b>BTC/USDT 突破3h最高价!</b>\n\n"
-                                          f"当前: ${price:,.2f}\n此前3h最高: ${last_3h_high:,.2f}\n"
-                                          f"涨幅: +${price - last_3h_high:,.2f} "
-                                          f"(+{(price - last_3h_high) / last_3h_high * 100:.2f}%)",
-                                          timeout=timeout)
-                            last_breakout_alert = now
-                    last_3h_high = high3h
-
-            # 2) 突破 24h 最高价 → TG 通知
+            # --- 警报逻辑：突破 24h 最高价或触及阈值时发送 TG ---
             if high24h is not None:
                 if last_24h_high is None or high24h > last_24h_high:
                     if last_24h_high is not None:
@@ -265,7 +248,7 @@ def main():
                             last_breakout_alert = now
                     last_24h_high = high24h
 
-            # 3) 固定阈值警报
+            # 固定阈值警报
             if upper_threshold > 0 and price > upper_threshold:
                 if now - last_breakout_alert >= alert_cooldown:
                     send_telegram(session, bot_token, chat_id,
