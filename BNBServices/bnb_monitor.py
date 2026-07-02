@@ -142,8 +142,10 @@ WINDOWS = [
 
 def print_line(price: float | None, highs: list[float | None],
                base_price: float, prev_highs: list[float | None],
+               prev_lows: list[float | None],
                breakout_streak: int = 0,
-               new_high_flags: list[bool] | None = None) -> None:
+               new_high_flags: list[bool] | None = None,
+               new_low_flags: list[bool] | None = None) -> None:
     ts = datetime.fromtimestamp(time.time()).strftime("%Y.%m.%d %H:%M:%S")
 
     def fmt_val(v: float | None) -> str:
@@ -158,8 +160,12 @@ def print_line(price: float | None, highs: list[float | None],
 
     if new_high_flags is None:
         new_high_flags = [False] * len(WINDOWS)
+    if new_low_flags is None:
+        new_low_flags = [False] * len(WINDOWS)
     if prev_highs is None:
         prev_highs = [None] * len(WINDOWS)
+    if prev_lows is None:
+        prev_lows = [None] * len(WINDOWS)
 
     parts = [f"[{ts}]-> {fmt_val(price)}"]
     for i, ((label, _), h) in enumerate(zip(WINDOWS, highs)):
@@ -168,12 +174,20 @@ def print_line(price: float | None, highs: list[float | None],
     # 与启动基准比较
     parts.append(f"start->{fmt_val(base_price)}({fmt_pct(base_price)})")
 
-    # 刷新历史最高（只取第一个触发的窗口，避免重复）
+    # 刷新历史最高
     if any(new_high_flags) and prev_highs is not None:
         for i in range(len(WINDOWS)):
             if new_high_flags[i] and prev_highs[i] is not None and highs[i] is not None and highs[i] > prev_highs[i]:
                 pct = (highs[i] - prev_highs[i]) / prev_highs[i] * 100
-                parts.append(f"[new:{fmt_val(prev_highs[i])} -> {fmt_val(highs[i])}(+{pct:.4f}%)]")
+                parts.append(f"[Up:{fmt_val(prev_highs[i])} -> {fmt_val(highs[i])}(+{pct:.4f}%)]")
+                break
+
+    # 刷新历史最低
+    if any(new_low_flags) and prev_lows is not None:
+        for i in range(len(WINDOWS)):
+            if new_low_flags[i] and prev_lows[i] is not None and highs[i] is not None and highs[i] < prev_lows[i]:
+                pct = (highs[i] - prev_lows[i]) / prev_lows[i] * 100
+                parts.append(f"[Down:{fmt_val(prev_lows[i])} -> {fmt_val(highs[i])}({pct:.4f}%)]")
                 break
 
     if breakout_streak >= 1:
@@ -228,6 +242,7 @@ def main():
     consecutive_failures = 0
     base_price = None
     prev_highs = None
+    prev_lows = None
 
     print_header()
 
@@ -258,7 +273,7 @@ def main():
             highs = [get_highest_since(now - w) for _, w in WINDOWS]
             high24h = highs[3]
 
-            # 检测刷新历史最高（用旧的 prev_highs 比较，保留一份给 print_line）
+            # 检测刷新历史最高
             old_highs = prev_highs
             new_high_flags = [False] * len(WINDOWS)
             if old_highs is not None:
@@ -267,6 +282,17 @@ def main():
                         if highs[i] > old_highs[i]:
                             new_high_flags[i] = True
             prev_highs = highs
+
+            # 检测刷新历史最低（当前价格 = 窗口最低）
+            lows = highs  # 当只有一条记录时 high==low；实际需要单独追踪 low。简化：用 price 比
+            old_lows = prev_lows
+            new_low_flags = [False] * len(WINDOWS)
+            if old_lows is not None:
+                for i in range(len(WINDOWS)):
+                    if highs[i] is not None and old_lows[i] is not None:
+                        if highs[i] < old_lows[i]:
+                            new_low_flags[i] = True
+            prev_lows = highs
 
             # Breakout detection
             if high24h is not None and high24h > 0:
@@ -285,7 +311,7 @@ def main():
             else:
                 breakout_streak = 0
 
-            print_line(price, highs, base_price, old_highs, breakout_streak, new_high_flags)
+            print_line(price, highs, base_price, old_highs, old_lows, breakout_streak, new_high_flags, new_low_flags)
 
             # Fixed threshold alerts
             if upper_threshold > 0 and price > upper_threshold:
