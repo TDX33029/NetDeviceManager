@@ -121,8 +121,8 @@ def format_price_alert(price: float, high24h: float) -> str:
     sign = "+" if pct >= 0 else ""
     return (
         f"🚀 <b>BTC/USDT 24h High Alert!</b>\n\n"
-        f"Price: <b>${price:,.2f}</b>\n"
-        f"24h High: <b>${high24h:,.2f}</b>\n"
+        f"Price: <b>${price:,.4f}</b>\n"
+        f"24h High: <b>${high24h:,.4f}</b>\n"
         f"Change: {sign}{pct:,.6f}%\n\n"
         f"⏰ {now_utc}"
     )
@@ -134,7 +134,7 @@ def print_line(price: float | None, high15: float | None, high3h: float | None,
     ts = datetime.fromtimestamp(time.time()).strftime("%Y.%m.%d %H:%M:%S")
 
     def fmt_val(v: float | None) -> str:
-        return f"{v:,.2f}" if v is not None else "--"
+        return f"{v:,.4f}" if v is not None else "--"
 
     def fmt_pct(high: float | None) -> str:
         if high is not None and price is not None and high > 0:
