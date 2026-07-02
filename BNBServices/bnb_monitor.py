@@ -256,11 +256,13 @@ def main():
             highs = [get_highest_since(now - w) for _, w in WINDOWS]
             high24h = highs[3]
 
+            # 检测刷新历史最高（用旧的 prev_highs 比较，保留一份给 print_line）
+            old_highs = prev_highs
             new_high_flags = [False] * len(WINDOWS)
-            if prev_highs is not None:
+            if old_highs is not None:
                 for i in range(len(WINDOWS)):
-                    if highs[i] is not None and prev_highs[i] is not None:
-                        if highs[i] > prev_highs[i]:
+                    if highs[i] is not None and old_highs[i] is not None:
+                        if highs[i] > old_highs[i]:
                             new_high_flags[i] = True
             prev_highs = highs
 
@@ -281,7 +283,7 @@ def main():
             else:
                 breakout_streak = 0
 
-            print_line(price, highs, base_price, prev_highs, breakout_streak, new_high_flags)
+            print_line(price, highs, base_price, old_highs, breakout_streak, new_high_flags)
 
             # Fixed threshold alerts
             if upper_threshold > 0 and price > upper_threshold:
