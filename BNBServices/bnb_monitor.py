@@ -143,7 +143,7 @@ def print_line(price: float | None, high15: float | None, high3h: float | None,
             return f"{sign}{pct:.6f}%"
         return "--"
 
-    extra = f"  [near:{near_high_count}]" if near_high_count >= 3 else ""
+    extra = f"  [bk:{near_high_count}]" if near_high_count >= 1 else ""
     line = (f"[{ts}]-> {fmt_val(price)}    "
             f"15min->{fmt_val(high15)}({fmt_pct(high15)})  "
             f"3h->{fmt_val(high3h)}({fmt_pct(high3h)})  "
@@ -172,31 +172,30 @@ def main():
     if check_interval < 3:
         check_interval = 3
 
-    # 接近24h最高价触发参数
-    NEAR_RATIO = 0.995       # 99.5%
-    NEAR_CONSECUTIVE = 5     # 连续 N 次在 99.5% 以上才发通知
+    # 突破通知参数
+    BREAKOUT_CONSECUTIVE = 3     # 连续 N 次突破 24h 最高价才发通知
+    BREAKOUT_RATIO = 1.0001      # 价格需高出 24h 最高价 0.01% 才算有效突破
 
-    # 记录触发时的 24h 最高价基准 — 只在触发后重置，避免因 high24h 刷新导致 streak 反复清零
-    alert_24h_base = None
-    last_alert_price = 0.0
+    # 状态追踪
+    last_24h_high = None        # 当前追踪的 24h 最高价
+    breakout_streak = 0         # 连续突破次数
+    last_breakout_alert = 0.0   # 上次发送通知的时间
 
     log.info(f"启动监控 | 上限:{upper_threshold} 下限:{lower_threshold} "
              f"间隔:{check_interval}s 冷却:{alert_cooldown}s")
-    log.info(f"API: {base_url} | 接近阈值: {NEAR_RATIO*100}%连续{NEAR_CONSECUTIVE}次")
+    log.info(f"API: {base_url} | 突破通知: 连续{BREAKOUT_CONSECUTIVE}次突破24h最高价(+{BREAKOUT_RATIO*100-100:.2f}%)")
 
     session = create_http_session()
 
     send_telegram(session, bot_token, chat_id,
                   f"🟢 <b>BNBMonitor 已启动</b>\n\n"
                   f"币对: BTC/USDT\n间隔: {check_interval}s\n"
-                  f"通知条件: 连续{NEAR_CONSECUTIVE}次超过24h最高价的{NEAR_RATIO*100:.1f}%",
+                  f"通知条件: 连续{BREAKOUT_CONSECUTIVE}次突破24h最高价",
                   timeout=timeout)
 
     start_time = time.time()
     check_count = 0
     consecutive_failures = 0
-    last_breakout_alert = 0.0
-    near_high_streak = 0   # 连续接近 99.5% 的计数
 
     print_header()
 
@@ -210,7 +209,7 @@ def main():
                     send_telegram(session, bot_token, chat_id,
                                   "⚠️ 连续10次获取价格失败", timeout=timeout)
                     consecutive_failures = 0
-                near_high_streak = 0
+                breakout_streak = 0
                 time.sleep(check_interval)
                 continue
 
@@ -225,31 +224,28 @@ def main():
             high3h = get_highest_since(now - 10800)
             high24h = get_highest_since(now - 86400)
 
-            # --- 接近24h最高价检测（稳定基准，不因 high24h 滚动而清零）---
-            snapped_high = alert_24h_base or high24h
-            if snapped_high is not None and snapped_high > 0:
-                if price >= snapped_high * NEAR_RATIO:
-                    near_high_streak += 1
-                else:
-                    # 价格跌回阈值以下，重置所有
-                    near_high_streak = 0
-                    alert_24h_base = None
+            # --- 突破检测：价格持续突破 24h 最高价时通知 ---
+            if high24h is not None and high24h > 0:
 
-                # 连续 NEAR_CONSECUTIVE 次在 99.5% 以上 → 发送 TG
-                if near_high_streak >= NEAR_CONSECUTIVE:
+                # 价格高出 24h 最高价一定比例 → 有效突破
+                if price > high24h * BREAKOUT_RATIO:
+                    breakout_streak += 1
+                else:
+                    breakout_streak = 0
+
+                # 连续 BREAKOUT_CONSECUTIVE 次突破 → 发送 TG
+                if breakout_streak >= BREAKOUT_CONSECUTIVE:
                     if now - last_breakout_alert >= alert_cooldown:
                         send_telegram(session, bot_token, chat_id,
-                                      format_price_alert(price, snapped_high),
+                                      format_price_alert(price, high24h),
                                       timeout=timeout)
                         last_breakout_alert = now
-                    near_high_streak = 0
-                    alert_24h_base = None
+                    breakout_streak = 0
             else:
-                near_high_streak = 0
-                alert_24h_base = None
+                breakout_streak = 0
 
             # 终端输出
-            print_line(price, high15, high3h, high24h, near_high_streak)
+            print_line(price, high15, high3h, high24h, breakout_streak)
 
             # 固定阈值警报
             if upper_threshold > 0 and price > upper_threshold:
