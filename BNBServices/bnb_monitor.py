@@ -142,21 +142,30 @@ def format_price_alert(price: float, prev_24h_high: float) -> str:
 
 # --- 终端输出 ---
 def print_line(price: float | None, high15: float | None, high3h: float | None,
-               high24h: float | None, check_count: int, elapsed: float) -> None:
-    """单行输出: yyyymmddhhmmss->xxx.xx  15m->xxx.xx;3h->xxx.xx;24h->xxx.xx"""
-    ts = datetime.fromtimestamp(time.time()).strftime("%Y%m%d%H%M%S")
+               high24h: float | None) -> None:
+    """单行输出: 2026-07-03 01:48:35 -> 61665.17  15m:61670.09(+0.01%);  3h:61670.09(+0.01%);  24h:61670.09(+0.01%)"""
+    ts = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d %H:%M:%S")
 
-    def f(v):
+    def fmt_val(v: float | None) -> str:
         return f"{v:.2f}" if v is not None else "--"
 
-    print(f"{ts}->{f(price)}  "
-          f"15m->{f(high15)};3h->{f(high3h)};24h->{f(high24h)}",
-          flush=True)
+    def fmt_pct(high: float | None) -> str:
+        if high is not None and price is not None and high > 0:
+            pct = (price - high) / high * 100
+            sign = "+" if pct >= 0 else ""
+            return f"{sign}{pct:.2f}%"
+        return "--"
+
+    line = (f"{ts} -> {fmt_val(price)}  "
+            f"15m:{fmt_val(high15)}({fmt_pct(high15)})  "
+            f"3h:{fmt_val(high3h)}({fmt_pct(high3h)})  "
+            f"24h:{fmt_val(high24h)}({fmt_pct(high24h)})")
+    print(line, flush=True)
 
 
 def print_header() -> None:
     print("BNBMonitor — BTC/USDT 启动")
-    print("格式: yyyymmddhhmmss->价格  15m->最高;3h->最高;24h->最高")
+    print("格式: 时间 -> 当前价格  15m:最高(涨跌%)  3h:最高(涨跌%)  24h:最高(涨跌%)")
 
 
 # --- 主循环 ---
@@ -226,8 +235,7 @@ def main():
             high24h = get_highest_since(now - 86400)
 
             # 终端单行输出
-            elapsed = now - start_time
-            print_line(price, high15, high3h, high24h, check_count, elapsed)
+            print_line(price, high15, high3h, high24h)
 
             # --- 警报逻辑：仅当突破 24h 最高价时发送 TG ---
             if high24h is not None:
