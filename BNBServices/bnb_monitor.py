@@ -140,28 +140,20 @@ def format_price_alert(price: float, prev_24h_high: float) -> str:
 # --- 终端输出 ---
 def print_line(price: float | None, high15: float | None, high3h: float | None,
                high24h: float | None, check_count: int, elapsed: float) -> None:
-    """单行输出：时间 | 当前价 | 15min最高 | 3h最高 | 24h最高 | 检查次数"""
-    ts = datetime.fromtimestamp(time.time()).strftime("%H:%M:%S")
+    """单行输出: yyyymmddhhmmss->xxx.xx  15m->xxx.xx;3h->xxx.xx;24h->xxx.xx"""
+    ts = datetime.fromtimestamp(time.time()).strftime("%Y%m%d%H%M%S")
 
-    def fmt(v):
-        return f"${v:>10,.2f}" if v is not None else "       --"
+    def f(v):
+        return f"{v:.2f}" if v is not None else "--"
 
-    price_str = f"${price:>10,.2f}" if price is not None else "     获取中"
-
-    print(f"{ts} | 当前 {price_str} | "
-          f"15m最高 {fmt(high15)} | 3h最高 {fmt(high3h)} | "
-          f"24h最高 {fmt(high24h)} | "
-          f"运行 {format_duration(elapsed)} | 第{check_count}次",
+    print(f"{ts}->{f(price)}  "
+          f"15m->{f(high15)};3h->{f(high3h)};24h->{f(high24h)}",
           flush=True)
 
 
 def print_header() -> None:
-    print()
-    print("  BTC/USDT 实时汇率监测")
-    print("  " + "-" * 72)
-    print(f"  {'时间':<8} | {'当前价格':>10} | {'15min最高':>10} | "
-          f"{'3h最高':>10} | {'24h最高':>10} | {'运行时间':<10} | 检查")
-    print("  " + "-" * 72)
+    print("BNBMonitor — BTC/USDT 启动")
+    print("格式: yyyymmddhhmmss->价格  15m->最高;3h->最高;24h->最高")
 
 
 # --- 主循环 ---
