@@ -165,7 +165,9 @@ def print_line(price: float | None, high15: float | None, high3h: float | None,
 
 def print_header() -> None:
     print("BNBMonitor — BTC/USDT 启动")
-    print("格式: [时间]-> 当前价格    15min->最高(涨跌%)  3h->最高(涨跌%)  24h->最高(涨跌%)")
+    print("=" * 60)
+    print("  格式: [时间]-> 当前价格  15min->最高(涨跌%)  3h->最高(涨跌%)  24h->最高(涨跌%)")
+    print("=" * 60)
 
 
 # --- 主循环 ---
