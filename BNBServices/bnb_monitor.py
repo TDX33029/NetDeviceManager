@@ -101,8 +101,9 @@ def send_telegram(session: requests.Session, bot_token: str, chat_id: str,
 
 
 # --- 价格历史 ---
-def _cleanup_history(now: float, window: float = 86400) -> None:
-    cutoff = now - window
+def _cleanup_history(now: float) -> None:
+    # 保留最长窗口的数据 (1w = 604800s)
+    cutoff = now - 604800
     while price_history and price_history[0][0] < cutoff:
         price_history.pop(0)
 
@@ -129,8 +130,18 @@ def format_price_alert(price: float, high24h: float) -> str:
 
 
 # --- 终端输出 ---
-def print_line(price: float | None, high15: float | None, high3h: float | None,
-               high24h: float | None, near_high_count: int = 0) -> None:
+# 时间窗口: 15min, 3h, 12h, 1d, 3d, 1w
+WINDOWS = [
+    ("15m", 900),
+    ("3h", 10800),
+    ("12h", 43200),
+    ("1d", 86400),
+    ("3d", 259200),
+    ("1w", 604800),
+]
+
+
+def print_line(price: float | None, highs: list[float | None], breakout_streak: int = 0) -> None:
     ts = datetime.fromtimestamp(time.time()).strftime("%Y.%m.%d %H:%M:%S")
 
     def fmt_val(v: float | None) -> str:
@@ -143,16 +154,19 @@ def print_line(price: float | None, high15: float | None, high3h: float | None,
             return f"{sign}{pct:.6f}%"
         return "--"
 
-    extra = f"  [bk:{near_high_count}]" if near_high_count >= 1 else ""
-    line = (f"[{ts}]-> {fmt_val(price)}    "
-            f"15min->{fmt_val(high15)}({fmt_pct(high15)})  "
-            f"3h->{fmt_val(high3h)}({fmt_pct(high3h)})  "
-            f"24h->{fmt_val(high24h)}({fmt_pct(high24h)}){extra}")
-    print(line, flush=True)
+    parts = [f"[{ts}]-> {fmt_val(price)}"]
+    for (label, _), h in zip(WINDOWS, highs):
+        parts.append(f"{label}->{fmt_val(h)}({fmt_pct(h)})")
+    if breakout_streak >= 1:
+        parts.append(f"[bk:{breakout_streak}]")
+
+    print("    ".join(parts), flush=True)
 
 
 def print_header() -> None:
     print("BNBMonitor — BTC/USDT")
+    labels = "  ".join(f"{label}->最高(涨跌%)" for label, _ in WINDOWS)
+    print(f"[时间]-> 价格    {labels}")
 
 
 # --- 主循环 ---
@@ -220,9 +234,9 @@ def main():
             price_history.append((now, price))
             _cleanup_history(now)
 
-            high15 = get_highest_since(now - 900)
-            high3h = get_highest_since(now - 10800)
-            high24h = get_highest_since(now - 86400)
+            # 计算各时段最高价
+            highs = [get_highest_since(now - w) for _, w in WINDOWS]
+            high24h = highs[3]  # 1d is index 3 in WINDOWS
 
             # --- 突破检测：价格持续突破 24h 最高价时通知 ---
             if high24h is not None and high24h > 0:
@@ -245,7 +259,7 @@ def main():
                 breakout_streak = 0
 
             # 终端输出
-            print_line(price, high15, high3h, high24h, breakout_streak)
+            print_line(price, highs, breakout_streak)
 
             # 固定阈值警报
             if upper_threshold > 0 and price > upper_threshold:
