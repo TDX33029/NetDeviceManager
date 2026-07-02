@@ -165,16 +165,14 @@ def print_line(price: float | None, highs: list[float | None],
     # 与启动基准比较
     parts.append(f"start->{fmt_val(base_price)}({fmt_pct(base_price)})")
 
-    # 刷新历史高价标记：显示 旧高->新高
+    # 刷新历史高价标记：new: 旧高 -> 新高 (涨幅%)
     new_parts = []
     for i, (label, _) in enumerate(WINDOWS):
-        if new_high_flags[i] and prev_highs[i] is not None and highs[i] is not None:
-            new_parts.append(f"{label} {fmt_val(prev_highs[i])}>{fmt_val(highs[i])}")
+        if new_high_flags[i] and prev_highs[i] is not None and highs[i] is not None and highs[i] > prev_highs[i]:
+            pct = (highs[i] - prev_highs[i]) / prev_highs[i] * 100
+            new_parts.append(f"{fmt_val(prev_highs[i])} -> {fmt_val(highs[i])} (+{pct:.4f}%)")
     if new_parts:
         parts.append(f"[new:{' | '.join(new_parts)}]")
-
-    if breakout_streak >= 1:
-        parts.append(f"[bk:{breakout_streak}]")
 
     if breakout_streak >= 1:
         parts.append(f"[bk:{breakout_streak}]")
