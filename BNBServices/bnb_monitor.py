@@ -2,17 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 BNBMonitor — BTC/USDT 汇率实时监测脚本
-
-通过 Binance API 实时获取 BTC/USDT 汇率，当价格超过/低于设定阈值时，
-通过 Telegram Bot API 发送通知消息。
-
-使用方法:
-    1. 复制 config.example.ini 为 config.ini
-    2. 填写 Telegram Bot Token 和 Chat ID
-    3. 设置监测阈值
-    4. 运行: python bnb_monitor.py
-    5. (可选) 后台运行: nohup python bnb_monitor.py > monitor.log 2>&1 &
 """
+
 from __future__ import annotations
 
 import time
@@ -23,7 +14,7 @@ from configparser import ConfigParser
 from datetime import datetime, timezone
 from pathlib import Path
 
-# --- 强制 UTF-8 输出（解决 Windows 终端中文/Unicode 乱码） ---
+# 强制 UTF-8 输出
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -31,279 +22,152 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-
-# --- 日志配置 ---
+# --- 日志配置（仅文件，终端用 print 管理） ---
 LOG_FILE = Path(__file__).resolve().parent / "bnb_monitor.log"
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 logging.basicConfig(
     level=logging.INFO,
-    format=LOG_FORMAT,
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8")],
 )
 log = logging.getLogger("BNBMonitor")
 
-# --- 价格历史（用于多时段最高价追踪） ---
-# 每个元素为 (timestamp, price)，按时间递增排列
+# 价格历史
 price_history: list[tuple[float, float]] = []
 
 
-# --- 配置加载 ---
+# --- 配置 ---
 def load_config(config_path: str = None) -> ConfigParser:
-    """加载并验证配置文件。"""
     cfg = ConfigParser()
-    files_to_try = [
-        config_path,
-        Path(__file__).resolve().parent / "config.ini",
-        Path("config.ini"),
-    ]
-    loaded = False
-    for f in files_to_try:
+    files = [config_path,
+             Path(__file__).resolve().parent / "config.ini",
+             Path("config.ini")]
+    for f in files:
         if f and Path(f).exists():
             cfg.read(f, encoding="utf-8")
-            loaded = True
-            log.info(f"已加载配置文件: {f}")
+            log.info(f"已加载配置: {f}")
             break
-
-    if not loaded:
-        log.error("未找到 config.ini，请从 config.example.ini 复制并填写配置")
+    else:
+        log.error("未找到 config.ini")
         sys.exit(1)
 
-    # 验证必要字段
-    for section, key in [("telegram", "bot_token"), ("telegram", "chat_id")]:
-        if not cfg.get(section, key, fallback="").strip():
-            log.error(f"配置缺失: [{section}] {key}，请填写后重试")
+    for s, k in [("telegram", "bot_token"), ("telegram", "chat_id")]:
+        if not cfg.get(s, k, fallback="").strip():
+            log.error(f"配置缺失: [{s}] {k}")
             sys.exit(1)
-
-    if cfg.get("telegram", "bot_token") == "YOUR_BOT_TOKEN_HERE":
-        log.error("请先填写 config.ini 中的 Telegram Bot Token 和 Chat ID")
-        sys.exit(1)
-
     return cfg
 
 
-# --- 汇率获取 ---
+# --- HTTP ---
 def create_http_session(retries: int = 3) -> requests.Session:
-    """创建带重试机制的 HTTP 会话。"""
     s = requests.Session()
-    retry_strategy = Retry(
-        total=retries,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    s.mount("https://", adapter)
+    retry_strategy = Retry(total=retries, backoff_factor=1,
+                           status_forcelist=[429, 500, 502, 503, 504],
+                           allowed_methods=["GET"])
+    s.mount("https://", HTTPAdapter(max_retries=retry_strategy))
     return s
 
 
 def fetch_btc_usdt_price(session: requests.Session, base_url: str, timeout: int = 15) -> float | None:
-    """从 Binance API 获取 BTC/USDT 的最新成交价。
-
-    返回:
-        float: 当前价格，失败时返回 None
-    """
     url = f"{base_url.rstrip('/')}/api/v3/ticker/price"
-    params = {"symbol": "BTCUSDT"}
     try:
-        resp = session.get(url, params=params, timeout=timeout)
+        resp = session.get(url, params={"symbol": "BTCUSDT"}, timeout=timeout)
         resp.raise_for_status()
-        data = resp.json()
-        price = float(data["price"])
-        log.debug(f"当前 BTC/USDT 价格: ${price:,.2f}")
-        return price
+        return float(resp.json()["price"])
     except requests.RequestException as e:
-        log.error(f"获取价格失败（网络错误）: {e}")
+        log.error(f"获取价格失败: {e}")
     except (KeyError, ValueError, json.JSONDecodeError) as e:
-        log.error(f"解析价格数据失败: {e}")
+        log.error(f"解析价格失败: {e}")
     return None
 
 
-# --- Telegram 通知 ---
-def send_telegram_alert(
-    session: requests.Session,
-    bot_token: str,
-    chat_id: str,
-    message: str,
-    timeout: int = 15,
-) -> bool:
-    """通过 Telegram Bot API 发送消息。
-
-    返回:
-        bool: 发送成功返回 True，否则 False
-    """
+# --- Telegram ---
+def send_telegram(session: requests.Session, bot_token: str, chat_id: str,
+                  message: str, timeout: int = 15) -> bool:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "HTML",
-    }
     try:
-        resp = session.post(url, json=payload, timeout=timeout)
+        resp = session.post(url, json={"chat_id": chat_id, "text": message,
+                                       "parse_mode": "HTML"}, timeout=timeout)
         resp.raise_for_status()
-        result = resp.json()
-        if not result.get("ok"):
-            log.error(f"Telegram API 返回错误: {result}")
+        if not resp.json().get("ok"):
+            log.error(f"Telegram 返回错误: {resp.json()}")
             return False
-        log.info("Telegram 通知已发送")
+        log.info("TG 已发送")
         return True
     except requests.RequestException as e:
-        # 避免完整 URL（含 token）泄露到日志
-        log.error(f"发送 Telegram 消息失败（网络错误）: {type(e).__name__}")
+        log.error(f"TG 发送失败: {type(e).__name__}")
     except json.JSONDecodeError as e:
-        log.error(f"解析 Telegram 响应失败: {e}")
+        log.error(f"TG 解析失败: {e}")
     return False
 
 
-def format_price_message(
-    price: float,
-    threshold: float,
-    direction: str,
-    upper_threshold: float = 0,
-    lower_threshold: float = 0,
-) -> str:
-    """格式化要发送的价格警报消息（HTML 格式）。"""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    emoji = "🚀" if direction == "above" else "📉"
-    threshold_label = "上限" if direction == "above" else "下限"
-
-    # 构建阈值信息
-    threshold_lines = ""
-    if upper_threshold > 0:
-        threshold_lines += f"  价格上限: <b>${upper_threshold:,.2f}</b>\n"
-    if lower_threshold > 0:
-        threshold_lines += f"  价格下限: <b>${lower_threshold:,.2f}</b>\n"
-
-    return (
-        f"{emoji} <b>BTC/USDT 价格警报</b> {emoji}\n\n"
-        f"当前价格: <b>${price:,.2f}</b>\n"
-        f"触发条件: 超过{threshold_label} ${threshold:,.2f}\n\n"
-        f"阈值设置:\n"
-        f"{threshold_lines}"
-        f"\n⏰ 时间: {now}"
-    )
-
-
-# --- 终端状态面板 ---
+# --- 价格历史 ---
 def _cleanup_history(now: float, window: float = 86400) -> None:
-    """清理超过窗口的历史记录（默认24小时）。"""
     cutoff = now - window
     while price_history and price_history[0][0] < cutoff:
         price_history.pop(0)
 
 
 def get_highest_since(since_ts: float) -> float | None:
-    """返回自指定时间戳以来的最高价格。
-
-    参数:
-        since_ts: 起始时间戳
-
-    返回:
-        float | None: 最高价，若无数据返回 None
-    """
-    if not price_history:
-        return None
-    highest = None
-    for ts, price in price_history:
-        if ts >= since_ts:
-            if highest is None or price > highest:
-                highest = price
-    return highest
+    best = None
+    for ts, p in price_history:
+        if ts >= since_ts and (best is None or p > best):
+            best = p
+    return best
 
 
 def format_duration(seconds: float) -> str:
-    """格式化时长显示。"""
     if seconds < 60:
         return f"{seconds:.0f}s"
     elif seconds < 3600:
-        m = int(seconds // 60)
-        s = int(seconds % 60)
-        return f"{m}m {s}s"
+        return f"{int(seconds//60)}m{int(seconds%60)}s"
     else:
-        h = int(seconds // 3600)
-        m = int((seconds % 3600) // 60)
-        return f"{h}h {m}m"
+        return f"{int(seconds//3600)}h{int((seconds%3600)//60)}m"
 
 
-def print_status(
-    price: float | None,
-    upper_threshold: float,
-    lower_threshold: float,
-    start_time: float,
-    check_count: int,
-    consecutive_failures: int = 0,
-) -> None:
-    """在终端打印状态面板。
+def format_price_alert(price: float, prev_24h_high: float) -> str:
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    change = price - prev_24h_high
+    pct = (change / prev_24h_high * 100) if prev_24h_high > 0 else 0
+    return (
+        f"🚀 <b>BTC/USDT 突破24小时最高价!</b>\n\n"
+        f"当前价格: <b>${price:,.2f}</b>\n"
+        f"此前24h最高: <b>${prev_24h_high:,.2f}</b>\n"
+        f"涨幅: +${change:,.2f} (+{pct:.2f}%)\n\n"
+        f"⏰ {now_utc}"
+    )
 
-    每次循环调用，显示当前价格、阈值、多时段最高价和运行统计。
-    """
-    now = time.time()
-    elapsed = now - start_time
 
-    # 清屏（兼容大部分终端）
-    print("\033[2J\033[H", end="")
+# --- 终端输出 ---
+def print_line(price: float | None, high15: float | None, high3h: float | None,
+               high24h: float | None, check_count: int, elapsed: float) -> None:
+    """单行输出：时间 | 当前价 | 15min最高 | 3h最高 | 24h最高 | 检查次数"""
+    ts = datetime.fromtimestamp(time.time()).strftime("%H:%M:%S")
 
-    # 标题栏
-    print("╔══════════════════════════════════════════════╗")
-    print("║        BTC/USDT 实时汇率监测                  ║")
-    print("╠══════════════════════════════════════════════╣")
+    def fmt(v):
+        return f"${v:>10,.2f}" if v is not None else "       --"
 
-    # 当前价格
-    if price is not None:
-        print(f"║  当前价格: ${price:>12,.2f}                    ║")
-    else:
-        print(f"║  当前价格:       获取中...                    ║")
+    price_str = f"${price:>10,.2f}" if price is not None else "     获取中"
 
-    # 阈值
-    up_str = f"${upper_threshold:,.2f}" if upper_threshold > 0 else "未设置"
-    low_str = f"${lower_threshold:,.2f}" if lower_threshold > 0 else "未设置"
-    print(f"║  价格上限: {up_str:<14}  下限: {low_str:<14} ║")
+    print(f"{ts} | 当前 {price_str} | "
+          f"15m最高 {fmt(high15)} | 3h最高 {fmt(high3h)} | "
+          f"24h最高 {fmt(high24h)} | "
+          f"运行 {format_duration(elapsed)} | 第{check_count}次",
+          flush=True)
 
-    print("╠══════════════════════════════════════════════╣")
 
-    # 多时段最高价（滚动窗口：过去15分钟/3小时/24小时）
-    now_ts = time.time()
-    windows = [
-        ("15min", 900),
-        ("  3h", 10800),
-        (" 24h", 86400),
-    ]
-    for label, window in windows:
-        since_ts = now_ts - window
-        highest = get_highest_since(since_ts)
-        if highest is not None:
-            print(f"║  最高价格 ({label}): ${highest:>12,.2f}                ║")
-        else:
-            print(f"║  最高价格 ({label}): 数据收集中...              ║")
-
-    print("╠══════════════════════════════════════════════╣")
-
-    # 运行统计
-    run_time = format_duration(elapsed)
-    print(f"║  运行时间: {run_time:<20} 检查: {check_count:<6}     ║")
-
-    # 上一次检查时刻
-    now_str = datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"║  上次检查: {now_str:<28} ║")
-
-    if consecutive_failures > 0:
-        print(f"║  ⚠ 连续失败: {consecutive_failures} 次                          ║")
-
-    print("╚══════════════════════════════════════════════╝")
-    sys.stdout.flush()
+def print_header() -> None:
+    print()
+    print("  BTC/USDT 实时汇率监测")
+    print("  " + "-" * 72)
+    print(f"  {'时间':<8} | {'当前价格':>10} | {'15min最高':>10} | "
+          f"{'3h最高':>10} | {'24h最高':>10} | {'运行时间':<10} | 检查")
+    print("  " + "-" * 72)
 
 
 # --- 主循环 ---
 def main():
-    log.info("=" * 50)
-    log.info("BNBMonitor — BTC/USDT 汇率监测启动")
-    log.info("=" * 50)
-
     cfg = load_config()
 
-    # 读取配置
     bot_token = cfg.get("telegram", "bot_token").strip()
     chat_id = cfg.get("telegram", "chat_id").strip()
     upper_threshold = cfg.getfloat("monitor", "upper_threshold", fallback=0)
@@ -313,41 +177,32 @@ def main():
     base_url = cfg.get("api", "base_url", fallback="https://api.binance.com").strip()
     timeout = cfg.getint("api", "timeout", fallback=15)
 
-    # 安全检查间隔
     if check_interval < 10:
-        log.warning(f"检查间隔 {check_interval}s 过小，已调整为 10s")
         check_interval = 10
 
-    log.info(f"价格上限: ${upper_threshold:,.2f}" if upper_threshold > 0 else "价格上限: 未设置")
-    log.info(f"价格下限: ${lower_threshold:,.2f}" if lower_threshold > 0 else "价格下限: 未设置")
-    log.info(f"检查间隔: {check_interval}s | 警报冷却: {alert_cooldown}s")
-    log.info(f"TG Chat ID: {chat_id}")
+    log.info(f"启动监控 | 上限:{upper_threshold} 下限:{lower_threshold} "
+             f"间隔:{check_interval}s 冷却:{alert_cooldown}s")
+    log.info(f"API: {base_url}")
 
-    if upper_threshold <= 0 and lower_threshold <= 0:
-        log.error("至少需要设置一个阈值（upper_threshold 或 lower_threshold）")
-        sys.exit(1)
-
-    # 创建 HTTP 会话（复用连接）
     session = create_http_session()
 
-    # 冷却追踪: 记录每个方向上次发送警报的时间戳
-    last_alert_time = {"above": 0.0, "below": 0.0}
-
     # 启动通知
-    startup_msg = (
-        f"🟢 <b>BNBMonitor 已启动</b>\n\n"
-        f"监测币对: <b>BTC/USDT</b>\n"
-        f"检查间隔: {check_interval}s\n"
-        + (f"价格上限: ${upper_threshold:,.2f}\n" if upper_threshold > 0 else "")
-        + (f"价格下限: ${lower_threshold:,.2f}\n" if lower_threshold > 0 else "")
-    )
-    send_telegram_alert(session, bot_token, chat_id, startup_msg, timeout=timeout)
+    send_telegram(session, bot_token, chat_id,
+                  f"🟢 <b>BNBMonitor 已启动</b>\n\n"
+                  f"币对: BTC/USDT\n间隔: {check_interval}s\n"
+                  + (f"上限: ${upper_threshold:,.2f}\n" if upper_threshold > 0 else "")
+                  + (f"下限: ${lower_threshold:,.2f}\n" if lower_threshold > 0 else ""),
+                  timeout=timeout)
 
-    # 追踪变量
     start_time = time.time()
     check_count = 0
     consecutive_failures = 0
-    max_failures = 10
+
+    # 追踪 24h 最高价（用于突破通知）
+    last_24h_high = None
+    last_breakout_alert = 0.0  # 上次突破通知时间
+
+    print_header()
 
     try:
         while True:
@@ -355,78 +210,60 @@ def main():
 
             if price is None:
                 consecutive_failures += 1
-                log.warning(f"获取价格失败 ({consecutive_failures}/{max_failures})")
-                if consecutive_failures >= max_failures:
-                    send_telegram_alert(
-                        session,
-                        bot_token,
-                        chat_id,
-                        "⚠️ <b>BNBMonitor 警告</b>\n\n连续 10 次获取价格失败，请检查网络或 Binance API 状态。",
-                        timeout=timeout,
-                    )
+                if consecutive_failures >= 10:
+                    send_telegram(session, bot_token, chat_id,
+                                  "⚠️ 连续10次获取价格失败", timeout=timeout)
                     consecutive_failures = 0
-                print_status(None, upper_threshold, lower_threshold, start_time, check_count, consecutive_failures)
                 time.sleep(check_interval)
                 continue
 
-            consecutive_failures = 0  # 成功后重置
+            consecutive_failures = 0
             now = time.time()
             check_count += 1
 
-            # 更新价格历史
+            # 更新历史
             price_history.append((now, price))
             _cleanup_history(now)
 
-            # 终端状态显示
-            print_status(price, upper_threshold, lower_threshold, start_time, check_count)
+            # 计算各时段最高
+            high15 = get_highest_since(now - 900)
+            high3h = get_highest_since(now - 10800)
+            high24h = get_highest_since(now - 86400)
 
-            # 检查上限
+            # 终端单行输出
+            elapsed = now - start_time
+            print_line(price, high15, high3h, high24h, check_count, elapsed)
+
+            # --- 警报逻辑：仅当突破 24h 最高价时发送 TG ---
+            if high24h is not None:
+                # 追踪启动以来的 24h 最高价变化
+                if last_24h_high is None or high24h > last_24h_high:
+                    # 24h 最高价被刷新了
+                    if last_24h_high is not None:
+                        # 不是第一次，确实是"突破"
+                        if now - last_breakout_alert >= alert_cooldown:
+                            msg = format_price_alert(price, last_24h_high)
+                            send_telegram(session, bot_token, chat_id, msg, timeout=timeout)
+                            last_breakout_alert = now
+                    last_24h_high = high24h
+
+            # 固定阈值警报（保留原有功能）
             if upper_threshold > 0 and price > upper_threshold:
-                if now - last_alert_time["above"] >= alert_cooldown:
-                    msg = format_price_message(
-                        price, upper_threshold, "above", upper_threshold, lower_threshold
-                    )
-                    send_telegram_alert(session, bot_token, chat_id, msg, timeout=timeout)
-                    last_alert_time["above"] = now
-                else:
-                    remaining = alert_cooldown - (now - last_alert_time["above"])
-                    log.debug(f"上限警报冷却中，{remaining:.0f}s 后可再次发送")
-
-            # 检查下限
+                log.info(f"触发上限警报: ${price:,.2f} > ${upper_threshold:,.2f}")
             if lower_threshold > 0 and price < lower_threshold:
-                if now - last_alert_time["below"] >= alert_cooldown:
-                    msg = format_price_message(
-                        price, lower_threshold, "below", upper_threshold, lower_threshold
-                    )
-                    send_telegram_alert(session, bot_token, chat_id, msg, timeout=timeout)
-                    last_alert_time["below"] = now
-                else:
-                    remaining = alert_cooldown - (now - last_alert_time["below"])
-                    log.debug(f"下限警报冷却中，{remaining:.0f}s 后可再次发送")
+                log.info(f"触发下限警报: ${price:,.2f} < ${lower_threshold:,.2f}")
 
             time.sleep(check_interval)
 
     except KeyboardInterrupt:
-        log.info("收到中断信号，正在退出…")
-        send_telegram_alert(
-            session,
-            bot_token,
-            chat_id,
-            "🔴 <b>BNBMonitor 已停止</b>\n\n监测程序已手动停止。",
-            timeout=10,
-        )
+        log.info("手动停止")
+        send_telegram(session, bot_token, chat_id, "🔴 BNBMonitor 已停止", timeout=10)
     except Exception:
-        log.exception("未预期的异常")
-        send_telegram_alert(
-            session,
-            bot_token,
-            chat_id,
-            "❌ <b>BNBMonitor 异常退出</b>\n\n请检查日志文件获取详细信息。",
-            timeout=10,
-        )
+        log.exception("异常退出")
+        send_telegram(session, bot_token, chat_id, "❌ BNBMonitor 异常退出", timeout=10)
     finally:
         session.close()
-        log.info("BNBMonitor 已退出")
+        log.info("退出")
 
 
 if __name__ == "__main__":
