@@ -23,6 +23,10 @@ from configparser import ConfigParser
 from datetime import datetime, timezone
 from pathlib import Path
 
+# --- 强制 UTF-8 输出（解决 Windows 终端中文/Unicode 乱码） ---
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
