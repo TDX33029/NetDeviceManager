@@ -1,4 +1,4 @@
 @echo off
-cd /d "D:\Document\tempPrj\NetDeviceManager\BNBServices"
-C:\Users\Lenovo\AppData\Local\Programs\Python\Python314\python.exe bnb_monitor.py
+cd /d "D:\Docunemt\临时工程项目\NetDeviceManager\BNBServices"
+python.exe bnb_monitor.py
 pause
