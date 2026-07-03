@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-BNBMonitor — BTC/USDT 汇率实时监测脚本
+BNBMonitor — BTC/USDT real-time price monitor
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from configparser import ConfigParser
 from datetime import datetime, timezone
 from pathlib import Path
 
-# 强制 UTF-8 输出（忽略重定向环境下不可 reconfigure 的错误）
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -25,7 +24,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-# --- 日志配置（仅文件，终端用 print 管理） ---
 LOG_FILE = Path(__file__).resolve().parent / "bnb_monitor.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -34,28 +32,30 @@ logging.basicConfig(
 )
 log = logging.getLogger("BNBMonitor")
 
-# 价格历史
 price_history: list[tuple[float, float]] = []
 
 
-# --- 配置 ---
+# --- Config ---
 def load_config(config_path: str = None) -> ConfigParser:
     cfg = ConfigParser()
     files = [config_path,
              Path(__file__).resolve().parent / "config.ini",
              Path("config.ini")]
+    # 支持命令行传入配置文件路径
+    if len(sys.argv) > 1:
+        files.insert(0, sys.argv[1])
     for f in files:
         if f and Path(f).exists():
             cfg.read(f, encoding="utf-8")
-            log.info(f"已加载配置: {f}")
+            log.info(f"Config loaded: {f}")
             break
     else:
-        log.error("未找到 config.ini")
+        log.error("config.ini not found")
         sys.exit(1)
 
     for s, k in [("telegram", "bot_token"), ("telegram", "chat_id")]:
         if not cfg.get(s, k, fallback="").strip():
-            log.error(f"配置缺失: [{s}] {k}")
+            log.error(f"Missing config: [{s}] {k}")
             sys.exit(1)
     return cfg
 
@@ -70,42 +70,42 @@ def create_http_session(retries: int = 3) -> requests.Session:
     return s
 
 
-def fetch_btc_usdt_price(session: requests.Session, base_url: str, timeout: int = 15) -> float | None:
+def fetch_btc_usdt_price(session: requests.Session, base_url: str, timeout: int = 10) -> float | None:
     url = f"{base_url.rstrip('/')}/api/v3/ticker/price"
     try:
         resp = session.get(url, params={"symbol": "BTCUSDT"}, timeout=timeout)
         resp.raise_for_status()
         return float(resp.json()["price"])
     except requests.RequestException as e:
-        log.error(f"获取价格失败: {e}")
+        log.error(f"Fetch price failed: {e}")
     except (KeyError, ValueError, json.JSONDecodeError) as e:
-        log.error(f"解析价格失败: {e}")
+        log.error(f"Parse price failed: {e}")
     return None
 
 
 # --- Telegram ---
 def send_telegram(session: requests.Session, bot_token: str, chat_id: str,
-                  message: str, timeout: int = 15) -> bool:
+                  message: str, timeout: int = 10) -> bool:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     try:
         resp = session.post(url, json={"chat_id": chat_id, "text": message,
                                        "parse_mode": "HTML"}, timeout=timeout)
         resp.raise_for_status()
         if not resp.json().get("ok"):
-            log.error(f"Telegram 返回错误: {resp.json()}")
+            log.error(f"Telegram error: {resp.json()}")
             return False
-        log.info("TG 已发送")
+        log.info("TG sent")
         return True
     except requests.RequestException as e:
-        log.error(f"TG 发送失败: {type(e).__name__}")
+        log.error(f"TG send failed: {type(e).__name__}")
     except json.JSONDecodeError as e:
-        log.error(f"TG 解析失败: {e}")
+        log.error(f"TG parse failed: {e}")
     return False
 
 
-# --- 价格历史 ---
-def _cleanup_history(now: float, window: float = 86400) -> None:
-    cutoff = now - window
+# --- Price history ---
+def _cleanup_history(now: float) -> None:
+    cutoff = now - 604800
     while price_history and price_history[0][0] < cutoff:
         price_history.pop(0)
 
@@ -118,57 +118,100 @@ def get_highest_since(since_ts: float) -> float | None:
     return best
 
 
-def format_duration(seconds: float) -> str:
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    elif seconds < 3600:
-        return f"{int(seconds//60)}m{int(seconds%60)}s"
-    else:
-        return f"{int(seconds//3600)}h{int((seconds%3600)//60)}m"
+def get_lowest_since(since_ts: float) -> float | None:
+    best = None
+    for ts, p in price_history:
+        if ts >= since_ts and (best is None or p < best):
+            best = p
+    return best
 
 
-def format_price_alert(price: float, prev_24h_high: float) -> str:
+def format_price_alert(price: float, high24h: float) -> str:
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    change = price - prev_24h_high
-    pct = (change / prev_24h_high * 100) if prev_24h_high > 0 else 0
+    pct = (price - high24h) / high24h * 100
+    sign = "+" if pct >= 0 else ""
     return (
-        f"🚀 <b>BTC/USDT 突破24小时最高价!</b>\n\n"
-        f"当前价格: <b>${price:,.2f}</b>\n"
-        f"此前24h最高: <b>${prev_24h_high:,.2f}</b>\n"
-        f"涨幅: +${change:,.2f} (+{pct:.2f}%)\n\n"
+        f"🚀 <b>BTC/USDT 24h High Alert!</b>\n\n"
+        f"Price: <b>${price:,.2f}</b>\n"
+        f"24h High: <b>${high24h:,.2f}</b>\n"
+        f"Change: {sign}{pct:,.6f}%\n\n"
         f"⏰ {now_utc}"
     )
 
 
-# --- 终端输出 ---
-def print_line(price: float | None, high15: float | None, high3h: float | None,
-               high24h: float | None) -> None:
-    """[2026.07.03 12:11:11]-> 12345.34    15min->23444.44(+xx.xx%)  3h->33333.33(+12.34%)  24h->xxxxx.xx(+xx.xx%)"""
+# --- Terminal output ---
+WINDOWS = [
+    ("15m", 900),
+    ("3h", 10800),
+    ("12h", 43200),
+    ("1d", 86400),
+]
+
+
+def print_line(price: float | None, highs: list[float | None],
+               lows: list[float | None],
+               base_price: float, prev_highs: list[float | None],
+               prev_lows: list[float | None],
+               breakout_streak: int = 0,
+               new_high_flags: list[bool] | None = None,
+               new_low_flags: list[bool] | None = None) -> None:
     ts = datetime.fromtimestamp(time.time()).strftime("%Y.%m.%d %H:%M:%S")
 
     def fmt_val(v: float | None) -> str:
         return f"{v:,.2f}" if v is not None else "--"
 
-    def fmt_pct(high: float | None) -> str:
-        if high is not None and price is not None and high > 0:
-            pct = (price - high) / high * 100
+    def fmt_pct(base: float) -> str:
+        if price is not None and base > 0:
+            pct = (price - base) / base * 100
             sign = "+" if pct >= 0 else ""
-            return f"{sign}{pct:.2f}%"
+            return f"{sign}{pct:.6f}%"
         return "--"
 
-    line = (f"[{ts}]-> {fmt_val(price)}    "
-            f"15min->{fmt_val(high15)}({fmt_pct(high15)})  "
-            f"3h->{fmt_val(high3h)}({fmt_pct(high3h)})  "
-            f"24h->{fmt_val(high24h)}({fmt_pct(high24h)})")
-    print(line, flush=True)
+    if new_high_flags is None:
+        new_high_flags = [False] * len(WINDOWS)
+    if new_low_flags is None:
+        new_low_flags = [False] * len(WINDOWS)
+    if prev_highs is None:
+        prev_highs = [None] * len(WINDOWS)
+    if prev_lows is None:
+        prev_lows = [None] * len(WINDOWS)
+
+    parts = [f"[{ts}]-> {fmt_val(price)}"]
+    for i, ((label, _), h) in enumerate(zip(WINDOWS, highs)):
+        parts.append(f"{label}->{fmt_val(h)}({fmt_pct(h)})")
+
+    # 与启动基准比较
+    parts.append(f"start->{fmt_val(base_price)}({fmt_pct(base_price)})")
+
+    # 刷新历史最高
+    if any(new_high_flags) and prev_highs is not None:
+        for i in range(len(WINDOWS)):
+            if new_high_flags[i] and prev_highs[i] is not None and highs[i] is not None and highs[i] > prev_highs[i]:
+                pct = (highs[i] - prev_highs[i]) / prev_highs[i] * 100
+                parts.append(f"[Up:{fmt_val(prev_highs[i])} -> {fmt_val(highs[i])}(+{pct:.4f}%)]")
+                break
+
+    # 刷新历史最低
+    if any(new_low_flags) and prev_lows is not None:
+        for i in range(len(WINDOWS)):
+            if new_low_flags[i] and prev_lows[i] is not None and lows[i] is not None and lows[i] < prev_lows[i]:
+                pct = (lows[i] - prev_lows[i]) / prev_lows[i] * 100
+                parts.append(f"[Drop:{fmt_val(prev_lows[i])} -> {fmt_val(lows[i])}({pct:.4f}%)]")
+                break
+
+    if breakout_streak >= 1:
+        parts.append(f"[bk:{breakout_streak}]")
+
+    print("    ".join(parts), flush=True)
 
 
 def print_header() -> None:
-    print("BNBMonitor — BTC/USDT 启动")
-    print("格式: [时间]-> 当前价格    15min->最高(涨跌%)  3h->最高(涨跌%)  24h->最高(涨跌%)")
+    print("BNBMonitor — BTC/USDT")
+    labels = "  ".join(f"{label}->high(%chg)" for label, _ in WINDOWS)
+    print(f"[time]-> price    {labels}    start->price(%chg)  [new:windows]")
 
 
-# --- 主循环 ---
+# --- Main loop ---
 def main():
     cfg = load_config()
 
@@ -176,35 +219,39 @@ def main():
     chat_id = cfg.get("telegram", "chat_id").strip()
     upper_threshold = cfg.getfloat("monitor", "upper_threshold", fallback=0)
     lower_threshold = cfg.getfloat("monitor", "lower_threshold", fallback=0)
-    check_interval = cfg.getfloat("monitor", "check_interval", fallback=60)
+    check_interval = cfg.getfloat("monitor", "check_interval", fallback=10)
     alert_cooldown = cfg.getint("monitor", "alert_cooldown", fallback=3600)
-    base_url = cfg.get("api", "base_url", fallback="https://api.binance.com").strip()
-    timeout = cfg.getint("api", "timeout", fallback=15)
+    base_url = cfg.get("api", "base_url", fallback="https://data-api.binance.vision").strip()
+    timeout = cfg.getint("api", "timeout", fallback=10)
 
-    if check_interval < 10:
-        check_interval = 10
+    if check_interval < 3:
+        check_interval = 3
 
-    log.info(f"启动监控 | 上限:{upper_threshold} 下限:{lower_threshold} "
-             f"间隔:{check_interval}s 冷却:{alert_cooldown}s")
-    log.info(f"API: {base_url}")
+    BREAKOUT_CONSECUTIVE = 3
+    BREAKOUT_RATIO = 1.0001
+
+    last_24h_high = None
+    breakout_streak = 0
+    last_breakout_alert = 0.0
+
+    log.info(f"Start | upper:{upper_threshold} lower:{lower_threshold} "
+             f"interval:{check_interval}s cooldown:{alert_cooldown}s")
+    log.info(f"API: {base_url} | breakout: {BREAKOUT_CONSECUTIVE}x above 24h high +{(BREAKOUT_RATIO-1)*100:.2f}%")
 
     session = create_http_session()
 
-    # 启动通知
     send_telegram(session, bot_token, chat_id,
-                  f"🟢 <b>BNBMonitor 已启动</b>\n\n"
-                  f"币对: BTC/USDT\n间隔: {check_interval}s\n"
-                  + (f"上限: ${upper_threshold:,.2f}\n" if upper_threshold > 0 else "")
-                  + (f"下限: ${lower_threshold:,.2f}\n" if lower_threshold > 0 else ""),
+                  f"🟢 <b>BNBMonitor started</b>\n\n"
+                  f"Pair: BTC/USDT\nInterval: {check_interval}s\n"
+                  f"Alert: {BREAKOUT_CONSECUTIVE}x breakout above 24h high",
                   timeout=timeout)
 
     start_time = time.time()
     check_count = 0
     consecutive_failures = 0
-
-    # 追踪 24h 最高价（用于突破通知）
-    last_24h_high = None
-    last_breakout_alert = 0.0  # 上次突破通知时间
+    base_price = None
+    prev_highs = None
+    prev_lows = None
 
     print_header()
 
@@ -216,8 +263,9 @@ def main():
                 consecutive_failures += 1
                 if consecutive_failures >= 10:
                     send_telegram(session, bot_token, chat_id,
-                                  "⚠️ 连续10次获取价格失败", timeout=timeout)
+                                  "⚠️ 10 consecutive fetch failures", timeout=timeout)
                     consecutive_failures = 0
+                breakout_streak = 0
                 time.sleep(check_interval)
                 continue
 
@@ -225,48 +273,80 @@ def main():
             now = time.time()
             check_count += 1
 
-            # 更新历史
             price_history.append((now, price))
             _cleanup_history(now)
 
-            # 计算各时段最高
-            high15 = get_highest_since(now - 900)
-            high3h = get_highest_since(now - 10800)
-            high24h = get_highest_since(now - 86400)
+            if base_price is None:
+                base_price = price
 
-            # 终端单行输出
-            print_line(price, high15, high3h, high24h)
+            highs = [get_highest_since(now - w) for _, w in WINDOWS]
+            lows = [get_lowest_since(now - w) for _, w in WINDOWS]
+            high24h = highs[3]
 
-            # --- 警报逻辑：仅当突破 24h 最高价时发送 TG ---
-            if high24h is not None:
-                # 追踪启动以来的 24h 最高价变化
-                if last_24h_high is None or high24h > last_24h_high:
-                    # 24h 最高价被刷新了
-                    if last_24h_high is not None:
-                        # 不是第一次，确实是"突破"
-                        if now - last_breakout_alert >= alert_cooldown:
-                            msg = format_price_alert(price, last_24h_high)
-                            send_telegram(session, bot_token, chat_id, msg, timeout=timeout)
-                            last_breakout_alert = now
-                    last_24h_high = high24h
+            # 检测刷新历史最高
+            old_highs = prev_highs
+            new_high_flags = [False] * len(WINDOWS)
+            if old_highs is not None:
+                for i in range(len(WINDOWS)):
+                    if highs[i] is not None and old_highs[i] is not None:
+                        if highs[i] > old_highs[i]:
+                            new_high_flags[i] = True
+            prev_highs = highs
 
-            # 固定阈值警报（保留原有功能）
+            # 检测刷新历史最低
+            old_lows = prev_lows
+            new_low_flags = [False] * len(WINDOWS)
+            if old_lows is not None:
+                for i in range(len(WINDOWS)):
+                    if lows[i] is not None and old_lows[i] is not None:
+                        if lows[i] < old_lows[i]:
+                            new_low_flags[i] = True
+            prev_lows = lows
+
+            # Breakout detection
+            if high24h is not None and high24h > 0:
+                if price > high24h * BREAKOUT_RATIO:
+                    breakout_streak += 1
+                else:
+                    breakout_streak = 0
+
+                if breakout_streak >= BREAKOUT_CONSECUTIVE:
+                    if now - last_breakout_alert >= alert_cooldown:
+                        send_telegram(session, bot_token, chat_id,
+                                      format_price_alert(price, high24h),
+                                      timeout=timeout)
+                        last_breakout_alert = now
+                    breakout_streak = 0
+            else:
+                breakout_streak = 0
+
+            print_line(price, highs, lows, base_price, old_highs, old_lows, breakout_streak, new_high_flags, new_low_flags)
+
+            # Fixed threshold alerts
             if upper_threshold > 0 and price > upper_threshold:
-                log.info(f"触发上限警报: ${price:,.2f} > ${upper_threshold:,.2f}")
+                if now - last_breakout_alert >= alert_cooldown:
+                    send_telegram(session, bot_token, chat_id,
+                                  f"⚠️ Above upper ${upper_threshold:,.2f} | now ${price:,.2f}",
+                                  timeout=timeout)
+                    last_breakout_alert = now
             if lower_threshold > 0 and price < lower_threshold:
-                log.info(f"触发下限警报: ${price:,.2f} < ${lower_threshold:,.2f}")
+                if now - last_breakout_alert >= alert_cooldown:
+                    send_telegram(session, bot_token, chat_id,
+                                  f"⚠️ Below lower ${lower_threshold:,.2f} | now ${price:,.2f}",
+                                  timeout=timeout)
+                    last_breakout_alert = now
 
             time.sleep(check_interval)
 
     except KeyboardInterrupt:
-        log.info("手动停止")
-        send_telegram(session, bot_token, chat_id, "🔴 BNBMonitor 已停止", timeout=10)
+        log.info("Stopped by user")
+        send_telegram(session, bot_token, chat_id, "🔴 BNBMonitor stopped", timeout=10)
     except Exception:
-        log.exception("异常退出")
-        send_telegram(session, bot_token, chat_id, "❌ BNBMonitor 异常退出", timeout=10)
+        log.exception("Unexpected exit")
+        send_telegram(session, bot_token, chat_id, "❌ BNBMonitor crashed", timeout=10)
     finally:
         session.close()
-        log.info("退出")
+        log.info("Exit")
 
 
 if __name__ == "__main__":
